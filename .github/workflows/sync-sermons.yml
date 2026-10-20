@@ -1,4 +1,3 @@
-
 name: Sincronizar prédicas de YouTube
 
 on:
@@ -9,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: sincronizar-predicas
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -16,6 +19,8 @@ jobs:
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configurar Node.js
         uses: actions/setup-node@v4
@@ -32,14 +37,25 @@ jobs:
           node --input-type=module -e '
           import fs from "node:fs";
           const data = JSON.parse(fs.readFileSync("sermons.generated.json", "utf8"));
+
           if (!Array.isArray(data) || data.length === 0) {
             throw new Error("El catálogo está vacío o no es válido.");
           }
+
+          const ids = new Set();
+
           for (const item of data) {
             if (!item.id || !item.youtubeVideoId || !item.title || !item.date) {
               throw new Error("Una prédica tiene campos obligatorios vacíos.");
             }
+
+            if (ids.has(item.youtubeVideoId)) {
+              throw new Error("Hay videos duplicados en el catálogo.");
+            }
+
+            ids.add(item.youtubeVideoId);
           }
+
           console.log(`Catálogo válido: ${data.length} prédicas.`);
           '
 
@@ -47,10 +63,22 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add sermons.generated.json
-          if ! git diff --cached --quiet; then
-            git commit -m "Actualizar catálogo de prédicas"
-            git push
-          else
+
+          git add -- sermons.generated.json
+
+          if git diff --cached --quiet; then
             echo "El catálogo no cambió."
+            exit 0
           fi
+
+          git commit -m "Actualizar catálogo de prédicas"
+
+          git fetch origin main
+
+          if ! git merge --no-edit FETCH_HEAD; then
+            echo "::error::No se pudieron integrar los cambios remotos. No se sobrescribió el repositorio."
+            git merge --abort || true
+            exit 1
+          fi
+
+          git push origin HEAD:main
