@@ -1,0 +1,56 @@
+
+name: Sincronizar prédicas de YouTube
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 12 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Sincronizar playlist de YouTube
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: node scripts/sync-youtube-playlist.mjs
+
+      - name: Validar catálogo
+        run: |
+          node --input-type=module -e '
+          import fs from "node:fs";
+          const data = JSON.parse(fs.readFileSync("sermons.generated.json", "utf8"));
+          if (!Array.isArray(data) || data.length === 0) {
+            throw new Error("El catálogo está vacío o no es válido.");
+          }
+          for (const item of data) {
+            if (!item.id || !item.youtubeVideoId || !item.title || !item.date) {
+              throw new Error("Una prédica tiene campos obligatorios vacíos.");
+            }
+          }
+          console.log(`Catálogo válido: ${data.length} prédicas.`);
+          '
+
+      - name: Guardar cambios en GitHub
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sermons.generated.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Actualizar catálogo de prédicas"
+            git push
+          else
+            echo "El catálogo no cambió."
+          fi
